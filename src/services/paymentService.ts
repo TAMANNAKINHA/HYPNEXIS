@@ -259,6 +259,11 @@ export async function executePayment(payment: Payment, actor: string, injectedRu
     if (!fragment || fragment.inputs.length !== 2 || fragment.inputs[0].type !== 'address' || fragment.inputs[1].type !== 'uint256' || ['view', 'pure'].includes(fragment.stateMutability)) throw Object.assign(new Error(`Contract ABI must expose a state-changing ${method}(address,uint256).`), { status: 503 });
     const eventFragment = contractInterface.getEvent(CONTRACT_EXECUTION_EVENT);
     if (!eventFragment || eventFragment.inputs.length !== 2 || eventFragment.inputs[0].type !== 'address' || eventFragment.inputs[1].type !== 'uint256') throw Object.assign(new Error(`Contract ABI must expose ${CONTRACT_EXECUTION_EVENT}(address,uint256).`), { status: 503 });
+    // The repository contract is an ERC-4337 account with session-key validation,
+    // not this backend's generic direct-call adapter. Until a reviewed UserOperation
+    // submitter and IMissionWallet receipt decoder are implemented, never create a
+    // real signer/provider from API configuration. Injected runtimes are test-only.
+    if (!injectedRuntime) throw Object.assign(new Error('Real chain submission is disabled: no compatible IMissionWallet/UserOperation adapter is implemented.'), { status: 503 });
     const decimals = Number(process.env.PAYMENT_DECIMALS || 18);
     if (!Number.isInteger(decimals) || decimals < 0 || decimals > 18) throw Object.assign(new Error('PAYMENT_DECIMALS must be an integer from 0 to 18.'), { status: 503 });
     const chainAmount = parseUnits(payment.amount, decimals);

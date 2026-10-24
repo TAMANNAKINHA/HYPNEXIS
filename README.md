@@ -126,12 +126,20 @@ npm run dev
 ```
 ---
 🔌 API Endpoints
-Method	Endpoint	Description
-POST	`/mission`	Create a new mission and wallet
-GET	`/mission/:id`	Get mission + wallet status
-POST	`/mission/:id/freeze`	Freeze an active wallet
-POST	`/mission/:id/terminate`	Terminate a mission
-GET	`/audit`	Fetch the audit trail
+
+The backend listens on port 5000 by default. Full request bodies, authentication roles, response fields, and lifecycle details are documented in [API_CONTRACT.md](API_CONTRACT.md).
+
+| Method | Endpoint | Description |
+|---|---|---|
+| GET | `/api/missions` | List demo missions (session keys omitted) |
+| GET | `/api/missions/:missionId` | Get demo mission details |
+| GET | `/api/missions/:missionId/wallet/status` | Get wallet state, explicitly labeled demo/not deployed |
+| POST | `/api/missions/create` | Create a demo mission |
+| POST | `/api/missions/execute` | Run demo simulation (`broadcasted: false`) |
+| GET/POST | `/api/payments` | Authenticated payment history and request creation |
+| POST | `/api/payments/:id/approve`, `/execute`, `/reconcile` | Authenticated lifecycle operations |
+
+Real payment execution remains disabled for the checked-in `IMissionWallet` interface; demo success is never represented as an on-chain transaction.
 ---
 🔭 Future Vision
 AEGIS aims to become the governance layer that powers autonomous financial agents across every enterprise payment network.

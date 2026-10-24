@@ -43,8 +43,9 @@ export const verifyOtp = async (req: Request, res: Response) => {
 
     return res.status(200).json({
       success: true,
-      message: 'OTP verified, execution resumed.',
-      txHash: result.txHash,
+      message: 'OTP verified; demo execution completed without broadcasting a transaction.',
+      simulated: result.simulated,
+      broadcasted: result.broadcasted,
     });
   } catch (error: any) {
     return res.status(500).json({ success: false, error: error.message });
@@ -61,7 +62,7 @@ export const rejectVerification = async (req: Request, res: Response) => {
       mission.status = 'cancelled' as any;
       Store.updateMission(mission);
       Store.addLog('Mission cancelled by user during verification prompt.', 'warning');
-      Store.addAudit('Verification Rejected', 'operator', '0x...', 'warning');
+      Store.addAudit('Verification Rejected', 'operator', 'simulation', 'warning');
     }
 
     verificationService.emitVerificationUpdate(missionId, {
@@ -106,8 +107,9 @@ export const verifyApprove = async (req: Request, res: Response) => {
 
     return res.status(200).json({
       success: true,
-      message: 'Manual review approved, execution resumed.',
-      txHash: result.txHash,
+      message: 'Manual review approved; demo execution completed without broadcasting a transaction.',
+      simulated: result.simulated,
+      broadcasted: result.broadcasted,
     });
   } catch (error: any) {
     console.error('Approve error:', error);

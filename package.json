@@ -8,7 +8,7 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "compile": "hardhat compile",
-    "test": "hardhat test",
+    "test": "npm run build && node --test test/paymentLifecycle.test.cjs test/blockchainService.test.cjs",
     "test:coverage": "hardhat coverage",
     "deploy": "hardhat run scripts/deploy.ts",
     "deploy:local": "hardhat run scripts/deploy.ts --network localhost",

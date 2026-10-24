@@ -16,6 +16,11 @@ export const create = async (req: Request, res: Response) => { try {
 export const simulatePayment = async (req: Request, res: Response) => { try { actor(req, ['reader', 'operator']); return res.json({ success: true, ...await simulate(validateProposal(req.body)) }); } catch (e: any) { return fail(res, e); } };
 export const list = (req: Request, res: Response) => { try { actor(req); return res.json({ success: true, payments: PaymentStore.all() }); } catch (e: any) { return fail(res, e); } };
 export const get = (req: Request, res: Response) => { try { actor(req); const p = PaymentStore.get(req.params.id); return p ? res.json({ success: true, payment: p, detailsHash: detailsHash(p) }) : res.status(404).json({ success: false, message: 'Payment not found' }); } catch (e: any) { return fail(res, e); } };
+export const listAgents = (req: Request, res: Response) => { try {
+  actor(req, ['reader', 'admin']);
+  const ids = [...new Set(PaymentStore.all().map(payment => payment.agentId).filter((id): id is string => Boolean(id)))];
+  return res.json({ success: true, agents: ids.map(agentId => ({ agentId, backendStatus: PaymentStore.isAgentDisabled(agentId) ? 'disabled' : 'active', paymentCount: PaymentStore.all().filter(payment => payment.agentId === agentId).length })) });
+} catch (e: any) { return fail(res, e); } };
 
 export const approve = async (req: Request, res: Response) => { try {
   const who = actor(req, ['approver']); const p = PaymentStore.get(req.params.id); if (!p) return res.status(404).json({ success: false, message: 'Payment not found' });

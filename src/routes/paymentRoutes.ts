@@ -5,6 +5,7 @@ const router = Router();
 router.post('/simulate', payments.simulatePayment);
 router.post('/', payments.create);
 router.get('/', payments.list);
+router.get('/agents', payments.listAgents);
 router.get('/:id', payments.get);
 router.post('/:id/approve', payments.approve);
 router.post('/:id/reject', payments.reject);

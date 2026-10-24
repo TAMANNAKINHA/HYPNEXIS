@@ -28,6 +28,13 @@ export class Store {
     return this.state;
   }
 
+  static getPublicState() {
+    return {
+      ...this.state,
+      missions: (this.state.missions || []).map(({ sessionKey: _sessionKey, ...mission }) => mission),
+    };
+  }
+
   static getMission(id: string): Mission | undefined {
     return this.state.missions?.find((m: Mission) => m.id === id);
   }
@@ -76,9 +83,10 @@ export class Store {
       this.state.walletStatus = 'active';
     }
 
-    TerminalLogger.broadcast('mission_update', { mission });
+    const { sessionKey: _sessionKey, ...publicMission } = mission;
+    TerminalLogger.broadcast('mission_update', { mission: publicMission });
     TerminalLogger.broadcast('wallet_status', { status: this.state.walletStatus });
-    TerminalLogger.broadcast('missions_list', { missions: this.state.missions });
+    TerminalLogger.broadcast('missions_list', { missions: this.getPublicState().missions });
   }
 
   static refundMission(missionId: string) {

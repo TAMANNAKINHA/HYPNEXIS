@@ -140,7 +140,7 @@ test('HTTP handlers reject unauthenticated creation, unauthorized approval, and 
 
 test('each payment endpoint rejects a valid token with the wrong role', async () => {
   const cases = [
-    ['create', 'reader'], ['simulatePayment', 'executor'], ['list', 'operator'], ['get', 'operator'],
+    ['create', 'reader'], ['simulatePayment', 'executor'], ['list', 'operator'], ['listAgents', 'operator'], ['get', 'operator'],
     ['approve', 'operator'], ['reject', 'operator'], ['freeze', 'operator'], ['unfreeze', 'operator'],
     ['freezeMission', 'operator'], ['unfreezeMission', 'operator'], ['execute', 'approver'],
     ['reconcile', 'approver'], ['killAgent', 'executor'], ['agentStatus', 'operator'],
@@ -345,6 +345,15 @@ test('real mode fails closed without a compatible configured chain and fabricate
   assert.equal(p.status, 'APPROVED');
   process.env.EXECUTION_MODE = 'demo';
   delete process.env.MISSION_RECIPIENTS_JSON;
+});
+
+test('real API execution remains disabled even with a generic ABI configured', async () => {
+  const id = mission(100); const p = (await createPayment(proposal(id, '3'), 'operator')).payment;
+  await approvePayment(p, 'approver', detailsHash(p)); configureReal(id);
+  await assert.rejects(executePayment(p, 'executor'), /no compatible IMissionWallet\/UserOperation adapter/);
+  assert.equal(p.status, 'APPROVED');
+  assert.equal(p.txHash, undefined);
+  resetDemoMode();
 });
 
 test('mocked RPC execution confirms only after hash, required confirmations, and matching event', async () => {
