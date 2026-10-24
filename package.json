@@ -1,0 +1,51 @@
+{
+  "name": "aegis-backend",
+  "version": "1.0.0",
+  "description": "Backend for AEGIS – Mission Wallets for Autonomous AI",
+  "main": "dist/server.js",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "test:coverage": "hardhat coverage",
+    "deploy": "hardhat run scripts/deploy.ts",
+    "deploy:local": "hardhat run scripts/deploy.ts --network localhost",
+    "node": "hardhat node"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "^5.0.2",
+    "cors": "^2.8.6",
+    "dotenv": "^16.6.1",
+    "ethers": "^6.17.0",
+    "express": "^4.22.2",
+    "express-rate-limit": "^8.6.2",
+    "io": "^1.5.8",
+    "nodemailer": "^9.0.3",
+    "socket.io": "^4.8.3",
+    "uuid": "^9.0.1"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-chai-matchers": "^2.0.0",
+    "@nomicfoundation/hardhat-ethers": "^3.0.0",
+    "@nomicfoundation/hardhat-network-helpers": "^1.1.2",
+    "@typechain/ethers-v6": "^0.5.1",
+    "@typechain/hardhat": "^9.1.0",
+    "@types/chai": "^4.3.0",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^20.11.0",
+    "@types/nodemailer": "^8.0.1",
+    "@types/uuid": "^9.0.7",
+    "chai": "^4.3.0",
+    "hardhat": "^2.22.0",
+    "hardhat-gas-reporter": "^2.1.0",
+    "solidity-coverage": "^0.8.5",
+    "ts-node-dev": "^2.0.0",
+    "tsx": "^4.23.1",
+    "typechain": "^8.3.2",
+    "typescript": "^5.3.3"
+  }
+}
