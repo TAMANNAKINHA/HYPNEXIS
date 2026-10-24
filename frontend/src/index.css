@@ -1,0 +1,146 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@theme {
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', monospace;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: #0b0b0b;
+  color: #ffffff;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+  letter-spacing: -0.01em;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(212, 175, 55, 0.2);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(212, 175, 55, 0.4);
+}
+
+::selection {
+  background: rgba(212, 175, 55, 0.3);
+  color: #ffffff;
+}
+
+@layer components {
+  .glass {
+    background: rgba(24, 24, 24, 0.6);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(212, 175, 55, 0.25);
+  }
+
+  .glass-strong {
+    background: rgba(18, 18, 18, 0.85);
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+    border: 1px solid rgba(212, 175, 55, 0.25);
+  }
+
+  .gold-border {
+    border: 1px solid rgba(212, 175, 55, 0.25);
+  }
+
+  .gold-text {
+    color: #d4af37;
+  }
+
+  .soft-gold-text {
+    color: #f4d37a;
+  }
+
+  .gold-glow {
+    box-shadow: 0 0 24px rgba(212, 175, 55, 0.15);
+  }
+
+  .gold-glow-strong {
+    box-shadow: 0 0 40px rgba(212, 175, 55, 0.3);
+  }
+
+  .success-glow {
+    box-shadow: 0 0 24px rgba(16, 185, 129, 0.25);
+  }
+
+  .error-glow {
+    box-shadow: 0 0 24px rgba(239, 68, 68, 0.3);
+  }
+
+  .warning-glow {
+    box-shadow: 0 0 24px rgba(245, 158, 11, 0.25);
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+  .animate-shimmer {
+    background-size: 200% 100%;
+    animation: shimmer 2.5s linear infinite;
+  }
+  @keyframes shimmer {
+    0% {
+      background-position: 200% 0;
+    }
+    100% {
+      background-position: -200% 0;
+    }
+  }
+  .grid-bg {
+    background-image:
+      linear-gradient(rgba(212, 175, 55, 0.035) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(212, 175, 55, 0.035) 1px, transparent 1px);
+    background-size: 44px 44px;
+  }
+  .radial-gold {
+    background: radial-gradient(
+      ellipse 70% 45% at 50% -10%,
+      rgba(212, 175, 55, 0.1),
+      transparent
+    );
+  }
+  .radial-gold-animated {
+    background: radial-gradient(
+      ellipse 60% 40% at 50% 0%,
+      rgba(212, 175, 55, 0.08),
+      transparent
+    );
+    animation: breathe 6s ease-in-out infinite;
+  }
+  @keyframes breathe {
+    0%, 100% {
+      opacity: 0.6;
+      transform: scale(1);
+    }
+    50% {
+      opacity: 1;
+      transform: scale(1.05);
+    }
+  }
+}

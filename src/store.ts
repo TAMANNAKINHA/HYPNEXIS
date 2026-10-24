@@ -1,10 +1,19 @@
 import { AegisState, Mission, ShieldId, ShieldStatus, TerminalLog, ChatMessage, AuditEntry, PolicyProfile, MissionCategory } from './types';
 import { TerminalLogger } from './services/terminalLogger';
-import { getPolicyByCategory, getDefaultPolicy } from './constants/policyProfiles';
+import { POLICY_LIBRARY, getDefaultPolicy } from './constants/policyProfiles';
+
+// Policy list as sent to the dashboard. The dashboard's Policy Engine modal shows a one-line
+// `rule`, so it is derived here from the real policy fields.
+function serializePolicy(p: PolicyProfile): PolicyProfile {
+  const vendors = (p.allowedVendors || []).join(', ');
+  return { ...p, rule: `budget <= ${p.defaultBudget} AND merchant IN (${vendors})` };
+}
+const freshPolicies = (): PolicyProfile[] => POLICY_LIBRARY.map(p => ({ ...p }));
 
 export class Store {
   private static state: Partial<AegisState> = {
     missions: [],
+    policies: freshPolicies(),
     walletStatus: 'empty',
     trustScore: 98,
     attackCount: 0,
@@ -32,6 +41,7 @@ export class Store {
     return {
       ...this.state,
       missions: (this.state.missions || []).map(({ sessionKey: _sessionKey, ...mission }) => mission),
+      policies: this.getPublicPolicies(),
     };
   }
 
@@ -43,8 +53,21 @@ export class Store {
     return this.state.missions || [];
   }
 
+  static getPublicPolicies(): PolicyProfile[] {
+    return (this.state.policies || []).map(serializePolicy);
+  }
+
+  // A disabled policy is not applied: callers fall back to the default (general) policy.
   static getPolicyForCategory(category: MissionCategory): PolicyProfile | undefined {
-    return getPolicyByCategory(category);
+    return (this.state.policies || []).find(p => p.category === category && p.enabled);
+  }
+
+  static togglePolicy(policyId: string): PolicyProfile | undefined {
+    const policy = (this.state.policies || []).find(p => p.id === policyId);
+    if (!policy) return undefined;
+    policy.enabled = !policy.enabled;
+    TerminalLogger.broadcast('policy_update', { policies: this.getPublicPolicies() });
+    return policy;
   }
 
   static getDefaultPolicy(): PolicyProfile {
@@ -220,6 +243,7 @@ export class Store {
   static resetDemoState() {
     this.state = {
       missions: [],
+      policies: freshPolicies(),
       walletStatus: 'empty',
       trustScore: 98,
       attackCount: 0,
@@ -248,7 +272,7 @@ export class Store {
         highestSpend: 0,
       },
     };
-    TerminalLogger.broadcast('state_reset', this.state);
+    TerminalLogger.broadcast('state_reset', this.getPublicState());
     TerminalLogger.broadcast('balance_update', { reserveBalance: 1000000, allocatedBalance: 0 });
     TerminalLogger.broadcast('profile_update', this.state.profile);
     TerminalLogger.broadcast('wallet_status', { status: 'empty' });

@@ -8,6 +8,7 @@ import {
   nukeWallet, 
   rotateSessionKey,
   getPolicies,
+  togglePolicy,
   resetDemo,
   listMissions,
   getMission,
@@ -31,6 +32,7 @@ router.post('/unfreeze', unfreezeWallet);
 router.post('/nuke', nukeWallet);
 router.post('/rotate-key', rotateSessionKey);
 router.post('/reset', resetDemo);
+router.post('/toggle-policy', togglePolicy);
 
 // Verification routes
 router.post('/verify/otp', verifyOtp);

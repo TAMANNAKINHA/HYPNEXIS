@@ -7,7 +7,10 @@
 | GAP-002 | Resolved | Backend lifecycle tests now run with `npm test`; contract tests/build remain separate and require a working Hardhat environment. | `npm test` | Person 2 |
 | BUG-002 | Low | `io` package in backend dependencies looks accidental (socket.io is already used). | package.json | Person 2 |
 | BUG-003 | Resolved | README and API_CONTRACT.md document the current `/api/missions`, `/api/attacks`, and `/api/payments` routes. | compare docs with `src/routes` | Person 2 |
-| BUG-004 | Low | frontend repo contains a 30 MB `aegis-project.zip`; remove from git. | ls frontend | Person 3 |
-| BUG-005 | Info | Frontend package name is still `vite-react-typescript-starter`. | package.json | Person 3 |
+| BUG-004 | Resolved in merged layout | `aegis-project.zip` (30 MB) is not carried into `frontend/`; also delete it from the old frontend repo history/tree. | ls frontend | Person 3 |
+| BUG-005 | Resolved | Frontend package name is `aegis-frontend`. | package.json | Person 3 |
+| INT-001 | Resolved | Dashboard Policy modal showed hard-coded policies and its toggle called a missing `/api/missions/toggle-policy`. Backend now owns the policy list (sent in `state_init`, `policy_update`) and implements the toggle; a disabled policy falls back to the General policy. | open Policies modal | Integration |
+| INT-002 | Open | `POST /api/missions/cancel-pending` is still unimplemented; `cancelPendingTx` in `frontend/src/services/api.ts` is not used by any component. | grep cancelPendingTx | Person 2/3 |
+| INT-003 | Open | Backend emits `trust_update` but the dashboard has no listener; `time_lock_update` is listened for but never emitted. | compare socket events | Person 2/3 |
 
 Prior verification claims are historical. In this workspace, `npm ci` failed with Windows `EPERM` while creating `node_modules/@types`; build and test commands therefore could not run here.
