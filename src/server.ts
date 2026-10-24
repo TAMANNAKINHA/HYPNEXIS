@@ -9,6 +9,7 @@ import { TerminalLogger } from './services/terminalLogger';
 import { Store } from './store';
 import missionRoutes from './routes/missionRoutes';
 import attackRoutes from './routes/attackRoutes';
+import paymentRoutes from './routes/paymentRoutes';
 
 const app = express();
 
@@ -25,7 +26,7 @@ const limiter = rateLimit({
 });
 app.use('/api/', limiter);
 
-app.use(express.json());
+app.use(express.json({ limit: '32kb' }));
 
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: process.env.FRONTEND_URL || '*' } });
@@ -34,8 +35,9 @@ TerminalLogger.initialize(io, () => Store.getState());
 
 app.use('/api/missions', missionRoutes);
 app.use('/api/attacks', attackRoutes);
+app.use('/api/payments', paymentRoutes);
 
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
-  console.log(`AEGIS Backend Engine running on port ${PORT}`);
+  console.log(`AEGIS demo backend running on port ${PORT}`);
 });
