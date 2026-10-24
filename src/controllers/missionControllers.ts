@@ -26,6 +26,32 @@ function generateSessionKey(): string {
   return crypto.randomBytes(32).toString('hex');
 }
 
+function publicMission(mission: Mission) {
+  const { sessionKey: _sessionKey, ...safeMission } = mission;
+  return safeMission;
+}
+
+export const listMissions = (_req: Request, res: Response) => {
+  return res.status(200).json({ success: true, missions: Store.getAllMissions().map(publicMission) });
+};
+
+export const getMission = (req: Request, res: Response) => {
+  const mission = Store.getMission(req.params.missionId);
+  if (!mission) return res.status(404).json({ success: false, message: 'Mission not found' });
+  return res.status(200).json({ success: true, mission: publicMission(mission) });
+};
+
+export const getWalletStatus = (req: Request, res: Response) => {
+  const mission = Store.getMission(req.params.missionId);
+  if (!mission) return res.status(404).json({ success: false, message: 'Mission not found' });
+  return res.status(200).json({
+    success: true,
+    missionId: mission.id,
+    walletStatus: mission.status,
+    wallet: { mode: 'demo', deployed: false, onChainRevocation: 'not_performed' },
+  });
+};
+
 function calculateDynamicRiskScore(mission: Mission, consecutiveFailures: number, isSpam: boolean): number {
   let score = 15;
 
@@ -64,6 +90,9 @@ export const getPolicies = (req: Request, res: Response) => {
 
 export const createMission = async (req: Request, res: Response) => {
   try {
+    if (process.env.USE_REAL_CONTRACT === 'true') {
+      return res.status(503).json({ success: false, message: 'Real wallet deployment is unavailable: the configured adapter is incompatible with the repository MissionWallet interface.' });
+    }
     const state = Store.getState();
 
     if (state.walletStatus === 'frozen') {
@@ -148,33 +177,13 @@ export const createMission = async (req: Request, res: Response) => {
       Store.updateTrust(0);
     }
 
-    if (process.env.USE_REAL_CONTRACT === 'true') {
-      try {
-        const { address, txHash } = await BlockchainService.deployRealMissionWallet(
-          mission.name,
-          mission.missionId,
-          mission.category || 'general',
-          mission.budget,
-          mission.merchant,
-          60,
-          86400
-        );
-        mission.walletAddress = address;
-        mission.contractTxHash = txHash;
-        mission.explorerUrl = BlockchainService.getExplorerUrl(address);
-        Store.updateMission(mission);
-      } catch (err) {
-        console.error('Real contract deployment failed:', err);
-      }
-    }
-
     Store.addLog(`Mission Created → ${name}`, 'gold');
     Store.addLog(`Mission Wallet Generated · ${mission.missionId}`, 'gold');
-    Store.addLog(`Session Key: ${mission.sessionKey.slice(0, 16)}... (stored securely)`, 'info');
-    Store.addAudit(`Create Mission: ${name}`, 'operator', '0x...', 'success');
+    Store.addLog('Mission session key generated and retained by the backend.', 'info');
+    Store.addAudit(`Create Mission: ${name}`, 'operator', 'simulation', 'success');
     Store.addChat('aegis', `Mission Wallet provisioned for "${name}". Budget locked at ₹${budget}. Standing by for execution.`);
 
-    return res.status(200).json({ success: true, mission });
+    return res.status(200).json({ success: true, mission: publicMission(mission), wallet: { mode: 'demo', deployed: false } });
   } catch (error: any) {
     console.error('Create mission error:', error);
     return res.status(500).json({ success: false, message: error.message });
@@ -263,7 +272,7 @@ export const executeMission = async (req: Request, res: Response) => {
         mission.status = 'failed';
         Store.updateMission(mission);
         Store.updateTrust(-15);
-        Store.addAudit(`Execute: ${mission.name}`, 'aegis', '0x...', 'blocked');
+        Store.addAudit(`Execute: ${mission.name}`, 'aegis', 'not_applicable', 'blocked');
         Store.addChat('aegis', `Execution blocked. ${failMessage}`);
         return res.status(400).json({ success: false, message: failMessage });
       } else {
@@ -413,7 +422,7 @@ export async function finalizeMissionExecution(missionId: string) {
       mission.status = 'failed';
       Store.updateMission(mission);
       Store.updateTrust(-15);
-      Store.addAudit(`Execute: ${mission.name}`, 'aegis', '0x...', 'blocked');
+      Store.addAudit(`Execute: ${mission.name}`, 'aegis', 'not_applicable', 'blocked');
       return { success: false, error: failMessage };
     } else {
       Store.updateShield(shieldId, 'success');
@@ -427,9 +436,9 @@ export async function finalizeMissionExecution(missionId: string) {
     return { success: false, error: 'Mission missing before final blockchain execution.' };
   }
 
-  Store.addLog(`Signing transaction with active session key: ${finalMissionState.sessionKey.slice(0, 16)}...`, 'info');
+  Store.addLog('Running the legacy demo payment preview; no blockchain transaction will be broadcast.', 'info');
 
-  const { success, txHash } = await BlockchainService.executeOnChain(finalMissionState.merchant, finalMissionState.budget, finalMissionState.sessionKey);
+  const { success, simulated, broadcasted } = await BlockchainService.executeOnChain(finalMissionState.merchant, finalMissionState.budget, finalMissionState.sessionKey);
 
   if (success) {
     finalMissionState.spent = finalMissionState.budget;
@@ -440,17 +449,17 @@ export async function finalizeMissionExecution(missionId: string) {
       (Store as any).updateProfileStats(finalMissionState.budget);
     }
 
-    Store.addLog('Transaction confirmed on-chain', 'success');
+    Store.addLog('Demo payment simulation completed; no on-chain payment was made.', 'success');
     Store.addLog(`Mission Complete · ${finalMissionState.name}`, 'success');
-    Store.addAudit(`Execute: ${finalMissionState.name}`, 'aegis', txHash || '0x...', 'success');
+    Store.addAudit(`Simulated execution: ${finalMissionState.name}`, 'aegis', 'simulation', 'success');
   } else {
     finalMissionState.status = 'failed';
     Store.updateMission(finalMissionState);
-    Store.addLog('Transaction failed on-chain', 'error');
-    Store.addAudit(`Execute: ${finalMissionState.name}`, 'aegis', '0x...', 'blocked');
+    Store.addLog('Demo payment simulation failed.', 'error');
+    Store.addAudit(`Simulated execution: ${finalMissionState.name}`, 'aegis', 'simulation', 'blocked');
   }
 
-  return { success, txHash };
+  return { success, simulated, broadcasted };
 }
 
 export const resetDemo = (req: Request, res: Response) => {
@@ -472,7 +481,7 @@ export const cancelMission = (req: Request, res: Response) => {
   mission.status = 'cancelled' as any;
   Store.updateMission(mission);
   Store.addLog('🛑 Mission CANCELLED by operator', 'warning');
-  Store.addAudit('Cancel mission', 'operator', '0x_cancel', 'warning');
+  Store.addAudit('Cancel mission', 'operator', 'simulation', 'warning');
   for (const id of ['missionGuard', 'policyEngine', 'riskEngine', 'smartContract', 'timeLock', 'circuitBreaker'] as ShieldId[]) {
     Store.updateShield(id, 'idle');
   }
@@ -489,7 +498,7 @@ export const freezeWallet = (req: Request, res: Response) => {
 
   Store.freezeWallet(missionId);
   Store.addLog('Wallet FROZEN — all activity halted', 'warning');
-  Store.addAudit('Freeze wallet', 'operator', '0x...', 'warning');
+  Store.addAudit('Freeze wallet', 'operator', 'simulation', 'warning');
   return res.status(200).json({ success: true });
 };
 
@@ -503,7 +512,7 @@ export const unfreezeWallet = (req: Request, res: Response) => {
 
   Store.unfreezeWallet(missionId);
   Store.addLog('❄️ Wallet unfrozen via manual override. Resuming normal operations.', 'info');
-  Store.addAudit('Unfreeze wallet', 'operator', '0x...', 'success');
+  Store.addAudit('Unfreeze wallet', 'operator', 'simulation', 'success');
   return res.status(200).json({ success: true });
 };
 
@@ -524,7 +533,7 @@ export const nukeWallet = (req: Request, res: Response) => {
   Store.getState().trustScore = 50;
   Store.updateTrust(0);
   Store.addLog('☠️ Wallet NUKED — all keys destroyed. System purged.', 'error');
-  Store.addAudit('Nuke wallet', 'operator', '0x_nuke', 'blocked');
+  Store.addAudit('Nuke wallet', 'operator', 'simulation', 'blocked');
 
   return res.status(200).json({ success: true });
 };
@@ -538,7 +547,7 @@ export const rotateSessionKey = (req: Request, res: Response) => {
   mission.sessionKey = newKey;
   Store.updateMission(mission);
 
-  Store.addLog(`Session key rotated to: ${newKey.slice(0, 16)}...`, 'gold');
-  Store.addAudit('Rotate session key', 'operator', `key_${newKey.slice(0, 8)}`, 'success');
+  Store.addLog('Mission session key rotated.', 'gold');
+  Store.addAudit('Rotate session key', 'operator', 'internal', 'success');
   return res.status(200).json({ success: true });
 };

@@ -27,7 +27,7 @@ export const simulatePromptInjection = async (req: Request, res: Response) => {
   if (!passed) {
     Store.incrementFailure();
     Store.updateTrust(-20);
-    Store.addAudit('Blocked Tx', 'Mission Guard', '0x1a2b3c4d...', 'blocked');
+    Store.addAudit('Blocked Tx', 'Mission Guard', 'simulation', 'blocked');
     Store.freezeWallet(mission.id);
     await CircuitBreaker.checkAndTrigger(mission.id);
   }
@@ -71,7 +71,7 @@ export const simulateStolenKey = async (req: Request, res: Response) => {
   Store.addLog('Signature verification failed on Smart Contract layer.', 'error');
   Store.updateShield('smartContract', 'failure');
   
-  Store.addAudit('Invalid Signature', 'Unknown Actor', '0x9f8e7d...', 'blocked');
+  Store.addAudit('Invalid Signature', 'Unknown Actor', 'simulation', 'blocked');
   Store.incrementFailure();
   Store.updateTrust(-25);
   Store.freezeWallet(mission.id);

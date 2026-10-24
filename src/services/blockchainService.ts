@@ -1,48 +1,13 @@
-import { ethers } from 'ethers';
-import dotenv from 'dotenv';
-
-dotenv.config();
-
-// Minimal ABI for the MissionWallet contract
-const MISSION_WALLET_ABI = [
-  "function missionName() view returns (string)",
-  "function missionId() view returns (string)",
-  "function category() view returns (string)",
-  "function budget() view returns (uint256)",
-  "function spent() view returns (uint256)",
-  "function frozen() view returns (bool)",
-  "function expiry() view returns (uint256)",
-  "function merchant() view returns (address)",
-  "function remainingBudget() view returns (uint256)",
-  "function isActive() view returns (bool)",
-  "function getStatus() view returns (string)",
-  "function execute(uint256 amount)",
-  "function freeze()",
-  "function unfreeze()",
-  "function refund()",
-  "function nuke()",
-];
-
+/**
+ * Legacy dashboard compatibility adapter. The checked-in MissionWallet does not
+ * expose the legacy ABI that this dashboard originally expected. Keep demo
+ * workflows available, but never impersonate deployment or chain activity.
+ */
 export class BlockchainService {
-  private static provider: ethers.Provider | null = null;
-  private static signer: ethers.Signer | null = null;
-  private static walletAddress: string | null = null;
-  static useRealContract = process.env.USE_REAL_CONTRACT === 'true';
-
-  static initialize() {
-    if (this.useRealContract) {
-      const rpcUrl = process.env.BASE_SEPOLIA_RPC || 'https://sepolia.base.org';
-      this.provider = new ethers.JsonRpcProvider(rpcUrl);
-      if (process.env.PRIVATE_KEY) {
-        this.signer = new ethers.Wallet(process.env.PRIVATE_KEY, this.provider);
-      }
+  static async deployMissionWallet(_merchant: string, _limit: number): Promise<void> {
+    if (process.env.USE_REAL_CONTRACT === 'true') {
+      throw new Error('Real MissionWallet deployment is unavailable: no reviewed deployment adapter is configured.');
     }
-  }
-
-  // ============= ORIGINAL MOCK DEPLOYMENT (unchanged signature) =============
-  static async deployMissionWallet(merchant: string, limit: number): Promise<string> {
-    const mockWallet = ethers.Wallet.createRandom();
-    return mockWallet.address;
   }
 
   // ============= OPTIONAL REAL CONTRACT DEPLOYMENT =============
@@ -55,42 +20,8 @@ export class BlockchainService {
     timelockSeconds: number = 60,
     expirySeconds: number = 86400
   ): Promise<{ address: string; txHash: string }> {
-    if (!this.useRealContract) {
-      throw new Error('Real contract deployment disabled. Set USE_REAL_CONTRACT=true.');
-    }
-
-    if (!this.signer) this.initialize();
-    if (!this.signer) throw new Error('Signer not configured; check PRIVATE_KEY in .env');
-
-    // In a full integration, you'd load the contract artifact here.
-    // For now, we still return a mock but log that it's the "real" path.
-    console.log('Real contract deployment requested – using mock for demonstration.');
-    const mockAddress = `0x${Array.from({ length: 40 }, () =>
-      Math.floor(Math.random() * 16).toString(16)
-    ).join('')}`;
-    const mockTxHash = `0x${Array.from({ length: 64 }, () =>
-      Math.floor(Math.random() * 16).toString(16)
-    ).join('')}`;
-    this.walletAddress = mockAddress;
-    return { address: mockAddress, txHash: mockTxHash };
-
-    /* Real implementation after Hardhat compilation:
-    const factory = new ethers.ContractFactory(
-      MISSION_WALLET_ABI,
-      // bytecode from build artifacts
-      '0x...',
-      this.signer
-    );
-    const contract = await factory.deploy(
-      name, missionId, category, budget, merchant,
-      timelockSeconds, expirySeconds
-    );
-    await contract.waitForDeployment();
-    const address = await contract.getAddress();
-    const txHash = contract.deploymentTransaction()!.hash;
-    this.walletAddress = address;
-    return { address, txHash };
-    */
+    void name; void missionId; void category; void budget; void merchant; void timelockSeconds; void expirySeconds;
+    throw new Error('Real MissionWallet deployment is unavailable: the repository has no reviewed deployment adapter or deployable artifact.');
   }
 
   // ============= Execute On-Chain =============
@@ -98,35 +29,28 @@ export class BlockchainService {
     walletAddress: string,
     amount: number,
     sessionKey: string
-  ): Promise<{ success: boolean; txHash: string }> {
-    if (!this.useRealContract) {
-      const mockTxHash = ethers.keccak256(
-        ethers.toUtf8Bytes(`tx_${sessionKey}_${Date.now()}`)
-      );
-      return { success: true, txHash: mockTxHash };
+  ): Promise<{ success: boolean; simulated: boolean; broadcasted: boolean }> {
+    void walletAddress; void amount; void sessionKey;
+    if (process.env.USE_REAL_CONTRACT === 'true') {
+      throw new Error('Real payment execution is unavailable: the configured payment adapter does not match IMissionWallet.');
     }
-    const mockTxHash = ethers.keccak256(
-      ethers.toUtf8Bytes(`exec_${walletAddress}_${Date.now()}`)
-    );
-    return { success: true, txHash: mockTxHash };
+    return { success: true, simulated: true, broadcasted: false };
   }
 
   // ============= Kill Switches =============
   static async triggerKillSwitch(
     walletAddress: string,
     type: 'freeze' | 'nuke' | 'cancel'
-  ): Promise<string> {
-    if (!this.useRealContract) {
-      return ethers.keccak256(
-        ethers.toUtf8Bytes(`kill_${type}_${Date.now()}`)
-      );
+  ): Promise<{ simulated: boolean; broadcasted: boolean }> {
+    void walletAddress; void type;
+    if (process.env.USE_REAL_CONTRACT === 'true') {
+      throw new Error('On-chain wallet controls are unavailable: no reviewed adapter for the configured MissionWallet is enabled.');
     }
-    return ethers.keccak256(
-      ethers.toUtf8Bytes(`kill_${type}_${walletAddress}_${Date.now()}`)
-    );
+    return { simulated: true, broadcasted: false };
   }
 
   static getExplorerUrl(address: string): string {
-    return `https://sepolia.basescan.org/address/${address}`;
+    void address;
+    throw new Error('An explorer URL is unavailable until a real wallet deployment is verified.');
   }
 }

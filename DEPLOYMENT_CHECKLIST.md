@@ -11,6 +11,8 @@
 - [ ] Deploy to Base Sepolia (chainId 84532), verify on Basescan
 - [ ] Record address + tx hash, then run integration tests against it
 
+Backend real payment execution remains disabled. Do not set `USE_REAL_CONTRACT=true` or `EXECUTION_MODE=real` yet: the backend does not implement the checked-in `IMissionWallet` UserOperation submission and event-decoding path. Enable only after the exact contract interface is confirmed and a reviewed backend adapter is tested against a deployment.
+
 ## Record (fill in only after real deployment)
 | Item | Value |
 |------|-------|
