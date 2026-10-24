@@ -24,7 +24,9 @@ contract MissionWallet is IMissionWallet, Ownable, ReentrancyGuard {
     mapping(address => bool) private _agentKilled;
     address[] private _recipientAllowlist;
     bool private _initialized;
+    bool private _emergencyKilled;
     IEntryPoint private immutable _entryPoint;
+    uint256 private _nonce;
 
     // ============ Constants ============
     uint256 private constant VALIDATION_FAILED = 1;
@@ -132,9 +134,14 @@ contract MissionWallet is IMissionWallet, Ownable, ReentrancyGuard {
             return SIG_AUTH_FAILED;
         }
 
-        // Return validation data with validUntil and validAfter (0 = no time range restriction)
+        // Return validation data with validUntil and validAfter
         // Packed as: (validUntil << 160) | (validAfter << 96) | sigAuthorizer (0 = no aggregator)
-        return 0;
+        // validUntil: session key expiry (or mission expiry, whichever is earlier)
+        // validAfter: 0 (no time restriction)
+        // sigAuthorizer: 0 (no signature aggregator)
+        uint256 validUntil = _config.expiry < sessionKey.expiry ? _config.expiry : sessionKey.expiry;
+        uint256 validAfter = 0;
+        return (validUntil << 160) | (validAfter << 96);
     }
 
     function executeUserOp(
@@ -146,13 +153,17 @@ contract MissionWallet is IMissionWallet, Ownable, ReentrancyGuard {
 
         // Execute payment
         _executePayment(agent, recipient, amount, sessionNonce);
+
+        // Increment ERC-4337 nonce after successful execution
+        incrementNonce();
     }
 
     function nonce() external view returns (uint256) {
-        // EntryPoint nonce - incremented per UserOperation
-        // For simplicity, we use a single nonce. In production, consider using
-        // a more sophisticated nonce scheme (e.g., sequential per sender).
-        return _config.totalBudget; // Placeholder - should track actual nonce
+        return _nonce;
+    }
+
+    function incrementNonce() internal {
+        _nonce += 1;
     }
 
     // ============ Mission Management (Owner Only) ============
@@ -232,9 +243,7 @@ contract MissionWallet is IMissionWallet, Ownable, ReentrancyGuard {
     }
 
     function emergencyKillAll() external onlyOwner onlyIfInitialized {
-        // Kill all agents with active session keys
-        // Note: We can't iterate mapping, so we emit event for each known agent
-        // In practice, backend tracks agents and calls activateKillSwitch per agent
+        _emergencyKilled = true;
         emit EmergencyKillAll(_config.missionId);
     }
 
@@ -423,10 +432,8 @@ contract MissionWallet is IMissionWallet, Ownable, ReentrancyGuard {
         }
     }
 
-    function _isEmergencyKilled() internal pure returns (bool) {
-        // Check if any agent is killed - in practice, we'd track a global flag
-        // For now, return false (emergency kill sets a flag)
-        return false;
+    function _isEmergencyKilled() internal view returns (bool) {
+        return _emergencyKilled;
     }
 
     modifier onlyEntryPoint() {
