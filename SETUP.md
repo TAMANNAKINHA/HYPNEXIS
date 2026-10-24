@@ -2,13 +2,17 @@
 
 Verified on: Node v22, npm 10, Ubuntu. Required: Node >= 20, npm >= 10, git.
 
-## Backend (repository root)
+## Fast path
+    ./scripts/setup.sh   # .env files + npm ci for both apps
+    ./scripts/dev.sh     # backend :5000 + frontend :5173
+
+## Manual: backend (repository root)
     cp .env.example .env        # use safe local placeholders; set distinct role tokens for payment API calls
     npm ci
     npm run dev                 # http://localhost:5000
     npm test                    # TypeScript build + backend lifecycle tests
 
-## Frontend
+## Manual: frontend
     cd frontend
     cp .env.example .env.local
     npm install

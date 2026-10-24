@@ -11,6 +11,15 @@ The backend is the brain behind AEGIS. It:
 > 🧩 **Where this fits:** rails like AP2, Visa Intelligent Commerce, and Skyfire move the money. AEGIS is the governance layer enterprises put in front of them.
 
 ---
+🚀 Run the full stack (backend + frontend)
+
+```
+./scripts/setup.sh   # once: writes .env files (random role tokens), installs both apps
+./scripts/dev.sh     # backend on :5000, dashboard on :5173
+```
+Open http://localhost:5173. Missions, wallet controls, attack simulations, the live terminal and the Policy Engine modal use REST + Socket.IO against the backend. The Payments tab needs a role token: paste `PAYMENT_ADMIN_TOKEN` from `.env` (the admin token is accepted for every action). Set `VITE_USE_MOCK=true` in `frontend/.env.local` to run the Payments tab on fake data without a backend.
+
+---
 🤔 Why AEGIS Exists
 	
 Traditional AI	Give the AI access to money and hope it behaves.

@@ -13,7 +13,6 @@ import { BlockchainService } from '../services/blockchainService';
 import { verificationEngine } from '../services/verificationEngine';
 import { verificationService } from '../services/verificationService';
 import { parseIntent } from '../services/aiParser';
-import { POLICY_LIBRARY } from '../constants/policyProfiles';
 
 function generateMissionId(): string {
   const chars = '0123456789ABCDEF';
@@ -82,10 +81,20 @@ function calculateDynamicRiskScore(mission: Mission, consecutiveFailures: number
 
 export const getPolicies = (req: Request, res: Response) => {
   try {
-    return res.status(200).json({ success: true, policies: POLICY_LIBRARY });
+    return res.status(200).json({ success: true, policies: Store.getPublicPolicies() });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }
+};
+
+export const togglePolicy = (req: Request, res: Response) => {
+  const { policyId } = req.body || {};
+  if (typeof policyId !== 'string' || !policyId) return res.status(400).json({ success: false, message: 'policyId required' });
+  const policy = Store.togglePolicy(policyId);
+  if (!policy) return res.status(404).json({ success: false, message: 'Policy not found' });
+  Store.addLog(`Policy "${policy.name}" ${policy.enabled ? 'enabled' : 'disabled'}${policy.enabled ? '' : ' - missions in this category fall back to the General policy'}.`, policy.enabled ? 'info' : 'warning');
+  Store.addAudit(`${policy.enabled ? 'Enable' : 'Disable'} Policy: ${policy.name}`, 'operator', 'policy', 'success');
+  return res.status(200).json({ success: true, policy, policies: Store.getPublicPolicies() });
 };
 
 export const createMission = async (req: Request, res: Response) => {
