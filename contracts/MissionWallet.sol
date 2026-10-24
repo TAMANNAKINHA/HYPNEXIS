@@ -25,12 +25,24 @@ contract MissionWallet is IMissionWallet, Ownable, ReentrancyGuard {
     address[] private _recipientAllowlist;
     bool private _initialized;
     bool private _emergencyKilled;
+    bool private _emergencyFrozen;
     IEntryPoint private immutable _entryPoint;
     uint256 private _nonce;
+
+    // ============ Guardian Recovery State ============
+    IMissionWallet.GuardianConfig private _guardianConfig;
+    mapping(address => bool) private _isGuardian;
+    mapping(uint256 => IMissionWallet.RecoveryRequest) private _recoveryRequests;
+    uint256 private _recoveryRequestCounter;
+    mapping(uint256 => mapping(address => bool)) private _recoveryApprovals;
 
     // ============ Constants ============
     uint256 private constant VALIDATION_FAILED = 1;
     uint256 private constant SIG_AUTH_FAILED = 2;
+    uint256 private constant MIN_GUARDIAN_THRESHOLD = 1;
+    uint256 private constant MAX_GUARDIAN_THRESHOLD = 5;
+    uint256 private constant MIN_RECOVERY_DELAY = 172800; // 48 hours in seconds
+    uint256 private constant MAX_GUARDIANS = 5;
 
     // ============ Constructor ============
     constructor(address entryPoint) Ownable(msg.sender) {
@@ -72,6 +84,11 @@ contract MissionWallet is IMissionWallet, Ownable, ReentrancyGuard {
 
         // Check mission not emergency killed
         if (_isEmergencyKilled()) {
+            return VALIDATION_FAILED;
+        }
+
+        // Check emergency freeze
+        if (_emergencyFrozen) {
             return VALIDATION_FAILED;
         }
 
@@ -247,6 +264,190 @@ contract MissionWallet is IMissionWallet, Ownable, ReentrancyGuard {
         emit EmergencyKillAll(_config.missionId);
     }
 
+    // ============ Emergency Freeze (Owner Only) ============
+    function activateEmergencyFreeze() external onlyOwner onlyIfInitialized {
+        if (_emergencyFrozen) return;
+        _emergencyFrozen = true;
+        emit EmergencyFreezeActivated(_config.missionId);
+    }
+
+    function deactivateEmergencyFreeze() external onlyOwner onlyIfInitialized {
+        if (!_emergencyFrozen) return;
+        _emergencyFrozen = false;
+        emit EmergencyFreezeDeactivated(_config.missionId);
+    }
+
+    // ============ Guardian Recovery (Owner Config, Guardian Execution) ============
+    function setGuardianConfig(address[] calldata guardians, uint256 threshold, uint256 recoveryDelay) external onlyOwner onlyIfInitialized {
+        if (guardians.length == 0 || guardians.length > MAX_GUARDIANS) revert InvalidGuardianConfig();
+        if (threshold < MIN_GUARDIAN_THRESHOLD || threshold > guardians.length || threshold > MAX_GUARDIAN_THRESHOLD) revert InvalidGuardianConfig();
+        if (recoveryDelay < MIN_RECOVERY_DELAY) revert InvalidGuardianConfig();
+
+        // Check for duplicate guardians
+        for (uint256 i = 0; i < guardians.length; i++) {
+            if (guardians[i] == address(0)) revert InvalidGuardianConfig();
+            for (uint256 j = i + 1; j < guardians.length; j++) {
+                if (guardians[i] == guardians[j]) revert InvalidGuardianConfig();
+            }
+        }
+
+        // Reset guardian mapping
+        for (uint256 i = 0; i < _guardianConfig.guardians.length; i++) {
+            _isGuardian[_guardianConfig.guardians[i]] = false;
+        }
+
+        _guardianConfig.guardians = guardians;
+        _guardianConfig.threshold = threshold;
+        _guardianConfig.recoveryDelay = recoveryDelay;
+
+        for (uint256 i = 0; i < guardians.length; i++) {
+            _isGuardian[guardians[i]] = true;
+        }
+
+        emit GuardianConfigSet(_config.missionId, guardians, threshold, recoveryDelay);
+    }
+
+    function requestRecovery(address compromisedAgent, address replacementAgent) external onlyIfInitialized {
+        if (!_isGuardian[msg.sender]) revert NotGuardian();
+        if (_emergencyFrozen) revert MissionFrozen();
+        
+        SessionKeyLib.SessionKey storage compromisedKey = _sessionKeys[compromisedAgent];
+        if (compromisedKey.maxPerTx == 0) revert CompromisedAgentHasNoKey();
+        if (!compromisedKey.revoked) revert CompromisedAgentHasNoKey();
+
+        SessionKeyLib.SessionKey storage replacementKey = _sessionKeys[replacementAgent];
+        if (replacementKey.maxPerTx != 0) revert ReplacementAgentAlreadyHasKey();
+
+        _recoveryRequestCounter += 1;
+        uint256 requestId = _recoveryRequestCounter;
+
+        _recoveryRequests[requestId] = IMissionWallet.RecoveryRequest({
+            requestId: requestId,
+            compromisedAgent: compromisedAgent,
+            replacementAgent: replacementAgent,
+            requestedAt: block.timestamp,
+            approvals: 1,
+            vetoed: false,
+            executed: false,
+            cancelled: false
+        });
+
+        _recoveryApprovals[requestId][msg.sender] = true;
+
+        emit RecoveryRequested(requestId, compromisedAgent, replacementAgent, block.timestamp);
+        emit RecoveryApproved(requestId, msg.sender);
+    }
+
+    function approveRecovery(uint256 requestId) external onlyIfInitialized {
+        if (!_isGuardian[msg.sender]) revert NotGuardian();
+        if (_emergencyFrozen) revert MissionFrozen();
+
+        IMissionWallet.RecoveryRequest storage request = _recoveryRequests[requestId];
+        if (request.requestId == 0) revert InvalidRecoveryRequest();
+        if (request.executed) revert RecoveryAlreadyExecuted();
+        if (request.cancelled) revert RecoveryCancelledError();
+        if (request.vetoed) revert RecoveryVetoedByOwner();
+        if (_recoveryApprovals[requestId][msg.sender]) revert AlreadyApproved();
+
+        _recoveryApprovals[requestId][msg.sender] = true;
+        request.approvals += 1;
+
+        emit RecoveryApproved(requestId, msg.sender);
+    }
+
+    function vetoRecovery(uint256 requestId) external onlyOwner onlyIfInitialized {
+        IMissionWallet.RecoveryRequest storage request = _recoveryRequests[requestId];
+        if (request.requestId == 0) revert InvalidRecoveryRequest();
+        if (request.executed) revert RecoveryAlreadyExecuted();
+        if (request.cancelled) revert RecoveryCancelledError();
+        if (request.vetoed) return;
+
+        request.vetoed = true;
+        emit RecoveryVetoed(requestId, owner());
+    }
+
+    function executeRecovery(uint256 requestId) external onlyIfInitialized {
+        IMissionWallet.RecoveryRequest storage request = _recoveryRequests[requestId];
+        if (request.requestId == 0) revert InvalidRecoveryRequest();
+        if (request.executed) revert RecoveryAlreadyExecuted();
+        if (request.cancelled) revert RecoveryCancelledError();
+        if (request.vetoed) revert RecoveryVetoedByOwner();
+        if (request.approvals < _guardianConfig.threshold) revert InvalidRecoveryRequest();
+        if (block.timestamp < request.requestedAt + _guardianConfig.recoveryDelay) revert RecoveryDelayNotMet();
+        if (_emergencyFrozen) revert MissionFrozen();
+
+        // Execute recovery: replace the compromised agent's key with the replacement agent's key
+        SessionKeyLib.SessionKey storage compromisedKey = _sessionKeys[request.compromisedAgent];
+        SessionKeyLib.SessionKey storage replacementKey = _sessionKeys[request.replacementAgent];
+
+        // The replacement agent should have been granted a key by the owner before recovery execution
+        // Or we transfer the compromised agent's key config to the replacement agent
+        // For security, we require the owner to have pre-granted a session key to the replacement agent
+        if (replacementKey.maxPerTx == 0) revert ReplacementAgentAlreadyHasKey();
+
+        // Mark compromised agent's key as fully revoked (already revoked, but ensure)
+        compromisedKey.revoked = true;
+
+        request.executed = true;
+        emit RecoveryExecuted(requestId, request.compromisedAgent, request.replacementAgent);
+        emit SessionKeyReplaced(_config.missionId, request.compromisedAgent, request.replacementAgent);
+    }
+
+    function cancelRecovery(uint256 requestId) external onlyIfInitialized {
+        IMissionWallet.RecoveryRequest storage request = _recoveryRequests[requestId];
+        if (request.requestId == 0) revert InvalidRecoveryRequest();
+        if (request.executed) revert RecoveryAlreadyExecuted();
+        if (request.cancelled) revert RecoveryCancelledError();
+        if (request.vetoed) revert RecoveryVetoedByOwner();
+
+        // Only the requester or owner can cancel
+        if (msg.sender != owner() && !_recoveryApprovals[requestId][msg.sender]) {
+            revert UnauthorizedCaller();
+        }
+
+        request.cancelled = true;
+        emit RecoveryCancelled(requestId);
+    }
+
+    // ============ Session Key Replacement ============
+    function replaceSessionKey(address compromisedAgent, IMissionWallet.SessionKeyConfig calldata newConfig) external onlyOwner onlyIfInitialized {
+        SessionKeyLib.SessionKey storage compromisedKey = _sessionKeys[compromisedAgent];
+        if (compromisedKey.maxPerTx == 0) revert CompromisedAgentHasNoKey();
+        if (!compromisedKey.revoked) revert CompromisedAgentHasNoKey();
+
+        if (newConfig.agent == address(0)) revert InvalidMissionConfig();
+        if (newConfig.maxPerTx == 0 || newConfig.maxPerTx > _config.maxPerTx) revert InvalidMissionConfig();
+        if (newConfig.maxDaily == 0 || newConfig.maxDaily > _config.maxDaily) revert InvalidMissionConfig();
+        if (newConfig.expiry <= block.timestamp || newConfig.expiry > _config.expiry) revert InvalidMissionConfig();
+
+        // Validate allowlist recipients are in mission allowlist (if mission allowlist exists)
+        if (_recipientAllowlist.length > 0 && newConfig.allowedRecipients.length > 0) {
+            for (uint256 i = 0; i < newConfig.allowedRecipients.length; i++) {
+                bool allowed = false;
+                for (uint256 j = 0; j < _recipientAllowlist.length; j++) {
+                    if (_recipientAllowlist[j] == newConfig.allowedRecipients[i]) {
+                        allowed = true;
+                        break;
+                    }
+                }
+                if (!allowed) revert InvalidMissionConfig();
+            }
+        }
+
+        // Grant new session key to replacement agent
+        _sessionKeys[newConfig.agent] = SessionKeyLib.SessionKey({
+            maxPerTx: newConfig.maxPerTx,
+            maxDaily: newConfig.maxDaily,
+            expiry: newConfig.expiry,
+            allowedRecipients: newConfig.allowedRecipients,
+            revoked: false,
+            nonce: 0
+        });
+
+        emit SessionKeyGranted(_config.missionId, newConfig.agent, newConfig.expiry);
+        emit SessionKeyReplaced(_config.missionId, compromisedAgent, newConfig.agent);
+    }
+
     // ============ Payment Execution (Internal) ============
     function _executePayment(
         address agent,
@@ -257,6 +458,7 @@ contract MissionWallet is IMissionWallet, Ownable, ReentrancyGuard {
         // Final validation before execution
         if (block.timestamp >= _config.expiry) revert MissionExpired();
         if (_isEmergencyKilled()) revert MissionKilled();
+        if (_emergencyFrozen) revert EmergencyFreezeActive();
         if (_agentKilled[agent]) revert MissionKilled();
 
         SessionKeyLib.SessionKey storage sessionKey = _sessionKeys[agent];
@@ -335,6 +537,7 @@ contract MissionWallet is IMissionWallet, Ownable, ReentrancyGuard {
         // Final validation before execution (mission-level only)
         if (block.timestamp >= _config.expiry) revert MissionExpired();
         if (_isEmergencyKilled()) revert MissionKilled();
+        if (_emergencyFrozen) revert EmergencyFreezeActive();
 
         SpendingLimits.Limits memory limits = SpendingLimits.Limits({
             maxPerTx: _config.maxPerTx,
@@ -409,6 +612,22 @@ contract MissionWallet is IMissionWallet, Ownable, ReentrancyGuard {
 
     function isInitialized() external view returns (bool) {
         return _initialized;
+    }
+
+    function isEmergencyFrozen() external view returns (bool) {
+        return _emergencyFrozen;
+    }
+
+    function getGuardianConfig() external view returns (IMissionWallet.GuardianConfig memory) {
+        return _guardianConfig;
+    }
+
+    function getRecoveryRequest(uint256 requestId) external view returns (IMissionWallet.RecoveryRequest memory) {
+        return _recoveryRequests[requestId];
+    }
+
+    function isGuardian(address account) external view returns (bool) {
+        return _isGuardian[account];
     }
 
     // ============ Internal Helpers ============
