@@ -38,6 +38,24 @@ interface IMissionWallet is IAccount {
         uint256 nonce;
     }
 
+    // ============ Emergency Freeze & Guardian Recovery ============
+    struct GuardianConfig {
+        address[] guardians;
+        uint256 threshold;
+        uint256 recoveryDelay;
+    }
+
+    struct RecoveryRequest {
+        uint256 requestId;
+        address compromisedAgent;
+        address replacementAgent;
+        uint256 requestedAt;
+        uint256 approvals;
+        bool vetoed;
+        bool executed;
+        bool cancelled;
+    }
+
     // ============ Events ============
     event MissionCreated(string indexed missionId, address indexed owner, uint256 budget);
     event PaymentExecuted(string indexed missionId, address indexed agent, address indexed recipient, uint256 amount, uint256 nonce);
@@ -50,6 +68,15 @@ interface IMissionWallet is IAccount {
     event SpendingLimitUpdated(string indexed missionId, uint256 maxPerTx, uint256 maxDaily);
     event RecipientAllowlistUpdated(string indexed missionId, address[] recipients);
     event BudgetUpdated(string indexed missionId, uint256 newBudget);
+    event EmergencyFreezeActivated(string indexed missionId);
+    event EmergencyFreezeDeactivated(string indexed missionId);
+    event GuardianConfigSet(string indexed missionId, address[] guardians, uint256 threshold, uint256 recoveryDelay);
+    event RecoveryRequested(uint256 indexed requestId, address indexed compromisedAgent, address indexed replacementAgent, uint256 requestedAt);
+    event RecoveryApproved(uint256 indexed requestId, address indexed guardian);
+    event RecoveryVetoed(uint256 indexed requestId, address indexed owner);
+    event RecoveryExecuted(uint256 indexed requestId, address indexed compromisedAgent, address indexed replacementAgent);
+    event RecoveryCancelled(uint256 indexed requestId);
+    event SessionKeyReplaced(string indexed missionId, address indexed oldAgent, address indexed newAgent);
 
     // ============ Errors ============
     error UnauthorizedCaller();
@@ -69,6 +96,18 @@ interface IMissionWallet is IAccount {
     error InvalidMissionConfig();
     error AgentAlreadyHasKey();
     error AgentHasNoKey();
+    error EmergencyFreezeActive();
+    error InvalidGuardianConfig();
+    error NotGuardian();
+    error AlreadyApproved();
+    error RecoveryDelayNotMet();
+    error RecoveryVetoedByOwner();
+    error RecoveryAlreadyExecuted();
+    error RecoveryCancelledError();
+    error InvalidRecoveryRequest();
+    error CompromisedAgentHasNoKey();
+    error ReplacementAgentAlreadyHasKey();
+    error MissionFrozen();
 
     // ============ Mission Management (Owner Only) ============
     function initialize(MissionConfig calldata config) external;
@@ -79,11 +118,24 @@ interface IMissionWallet is IAccount {
     // ============ Session Key Management (Owner Only) ============
     function grantSessionKey(SessionKeyConfig calldata config) external;
     function revokeSessionKey(address agent) external;
+    function replaceSessionKey(address compromisedAgent, SessionKeyConfig calldata newConfig) external;
 
     // ============ Kill Switch (Owner Only) ============
     function activateKillSwitch(address agent) external;
     function deactivateKillSwitch(address agent) external;
     function emergencyKillAll() external;
+
+    // ============ Emergency Freeze (Owner Only) ============
+    function activateEmergencyFreeze() external;
+    function deactivateEmergencyFreeze() external;
+
+    // ============ Guardian Recovery (Owner Config, Guardian Execution) ============
+    function setGuardianConfig(address[] calldata guardians, uint256 threshold, uint256 recoveryDelay) external;
+    function requestRecovery(address compromisedAgent, address replacementAgent) external;
+    function approveRecovery(uint256 requestId) external;
+    function vetoRecovery(uint256 requestId) external;
+    function executeRecovery(uint256 requestId) external;
+    function cancelRecovery(uint256 requestId) external;
 
     // ============ Payment Execution (Via UserOperation) ============
     function executePayment(address recipient, uint256 amount) external;
@@ -96,4 +148,8 @@ interface IMissionWallet is IAccount {
     function getRecipientAllowlist() external view returns (address[] memory);
     function isInitialized() external view returns (bool);
     function getRecipientSpent(address recipient) external view returns (uint256);
+    function isEmergencyFrozen() external view returns (bool);
+    function getGuardianConfig() external view returns (GuardianConfig memory);
+    function getRecoveryRequest(uint256 requestId) external view returns (RecoveryRequest memory);
+    function isGuardian(address account) external view returns (bool);
 }

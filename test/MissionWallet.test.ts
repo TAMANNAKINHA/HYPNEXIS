@@ -880,4 +880,891 @@ describe("MissionWallet", function () {
       expect(result).to.be.gte(0);
     });
   });
+
+  // ============ Emergency Freeze Tests ============
+  describe("Emergency Freeze", function () {
+    async function deployWithFreezeFixture() {
+      const { wallet, owner, agent1, agent2, recipient1, recipient2, config } = await loadFixture(deployWithSessionKeyFixture);
+      
+      // Grant session key to agent2 as well
+      await wallet.grantSessionKey({
+        agent: agent2.address,
+        maxPerTx: ethers.parseEther("0.5"),
+        maxDaily: ethers.parseEther("2"),
+        expiry: config.expiry,
+        allowedRecipients: [recipient2.address]
+      });
+      
+      return { wallet, owner, agent1, agent2, recipient1, recipient2, config };
+    }
+
+    it("Should activate emergency freeze (owner only)", async function () {
+      const { wallet, owner, unauthorized } = await loadFixture(deployMissionWalletFixture);
+      
+      await expect(wallet.activateEmergencyFreeze())
+        .to.emit(wallet, "EmergencyFreezeActivated");
+      
+      expect(await wallet.isEmergencyFrozen()).to.be.true;
+    });
+
+    it("Should reject unauthorized emergency freeze activation", async function () {
+      const { wallet, unauthorized } = await loadFixture(deployMissionWalletFixture);
+      
+      await expect(wallet.connect(unauthorized).activateEmergencyFreeze())
+        .to.be.revertedWithCustomError(wallet, "OwnableUnauthorizedAccount");
+    });
+
+    it("Should deactivate emergency freeze (owner only)", async function () {
+      const { wallet, owner } = await loadFixture(deployMissionWalletFixture);
+      
+      await wallet.activateEmergencyFreeze();
+      await expect(wallet.deactivateEmergencyFreeze())
+        .to.emit(wallet, "EmergencyFreezeDeactivated");
+      
+      expect(await wallet.isEmergencyFrozen()).to.be.false;
+    });
+
+    it("Should reject unauthorized emergency freeze deactivation", async function () {
+      const { wallet, owner, unauthorized } = await loadFixture(deployMissionWalletFixture);
+      
+      await wallet.activateEmergencyFreeze();
+      await expect(wallet.connect(unauthorized).deactivateEmergencyFreeze())
+        .to.be.revertedWithCustomError(wallet, "OwnableUnauthorizedAccount");
+    });
+
+    it("Should block all payments during emergency freeze (owner direct)", async function () {
+      const { wallet, owner, recipient1 } = await loadFixture(deployMissionWalletFixture);
+      
+      await wallet.activateEmergencyFreeze();
+      
+      await expect(wallet.executePayment(recipient1.address, ethers.parseEther("0.1")))
+        .to.be.revertedWithCustomError(wallet, "EmergencyFreezeActive");
+    });
+
+    it("Should block all payments during emergency freeze (UserOperation)", async function () {
+      const { wallet, owner, agent1, recipient1, config } = await loadFixture(deployWithSessionKeyFixture);
+      
+      await wallet.activateEmergencyFreeze();
+      
+      const userOp = {
+        sender: await wallet.getAddress(),
+        nonce: 0,
+        initCode: "0x",
+        callData: wallet.interface.encodeFunctionData("executePayment", [recipient1.address, ethers.parseEther("0.1")]),
+        callGasLimit: 100000,
+        verificationGasLimit: 100000,
+        preVerificationGas: 100000,
+        maxFeePerGas: ethers.parseUnits("1", "gwei"),
+        maxPriorityFeePerGas: ethers.parseUnits("1", "gwei"),
+        paymasterAndData: "0x",
+        signature: "0x"
+      };
+      
+      const userOpHash = ethers.keccak256("0x1234");
+      const result = await wallet.validateUserOp.staticCall(userOp, userOpHash, 0);
+      expect(result).to.equal(1); // VALIDATION_FAILED
+    });
+
+    it("Should allow payments after freeze is deactivated", async function () {
+      const { wallet, owner, recipient1 } = await loadFixture(deployMissionWalletFixture);
+      
+      await wallet.activateEmergencyFreeze();
+      await wallet.deactivateEmergencyFreeze();
+      
+      await expect(wallet.executePayment(recipient1.address, ethers.parseEther("0.1")))
+        .to.emit(wallet, "PaymentExecuted");
+    });
+
+    it("Should emit EmergencyFreezeActivated event", async function () {
+      const { wallet, owner, config } = await loadFixture(deployMissionWalletFixture);
+      
+      await expect(wallet.activateEmergencyFreeze())
+        .to.emit(wallet, "EmergencyFreezeActivated")
+        .withArgs(config.missionId);
+    });
+
+    it("Should emit EmergencyFreezeDeactivated event", async function () {
+      const { wallet, owner, config } = await loadFixture(deployMissionWalletFixture);
+      
+      await wallet.activateEmergencyFreeze();
+      await expect(wallet.deactivateEmergencyFreeze())
+        .to.emit(wallet, "EmergencyFreezeDeactivated")
+        .withArgs(config.missionId);
+    });
+
+    it("Should not affect spending tracker during freeze", async function () {
+      const { wallet, owner, recipient1 } = await loadFixture(deployMissionWalletFixture);
+      
+      await wallet.executePayment(recipient1.address, ethers.parseEther("0.5"));
+      const trackerBefore = await wallet.getSpendingTracker();
+      
+      await wallet.activateEmergencyFreeze();
+      
+      // Try to spend (should fail)
+      await expect(wallet.executePayment(recipient1.address, ethers.parseEther("0.1")))
+        .to.be.revertedWithCustomError(wallet, "EmergencyFreezeActive");
+      
+      const trackerAfter = await wallet.getSpendingTracker();
+      expect(trackerAfter.totalSpent).to.equal(trackerBefore.totalSpent);
+      expect(trackerAfter.dailySpent).to.equal(trackerBefore.dailySpent);
+    });
+  });
+
+  // ============ Guardian Recovery Tests ============
+  describe("Guardian Recovery", function () {
+    async function deployWithGuardiansFixture() {
+      const signers = await ethers.getSigners();
+      const owner = signers[0];
+      const agent1 = signers[1];
+      const agent2 = signers[2];
+      const agent3 = signers[3];
+      const agent4 = signers[4];
+      const agent5 = signers[5];
+      const agent6 = signers[6];
+      const recipient1 = signers[7];
+      const recipient2 = signers[8];
+      const unauthorized = signers[9];
+
+      // Deploy a mock EntryPoint
+      const EntryPointMock = await ethers.getContractFactory("EntryPointMock");
+      const entryPoint = await EntryPointMock.deploy();
+      
+      const MissionWallet = await ethers.getContractFactory("MissionWallet");
+      const wallet = await MissionWallet.deploy(await entryPoint.getAddress());
+      
+      const missionId = `MID-${Date.now().toString(36).toUpperCase()}`;
+      const config = {
+        missionId,
+        totalBudget: ethers.parseEther("10"),
+        maxPerTx: ethers.parseEther("1"),
+        maxDaily: ethers.parseEther("5"),
+        expiry: (await time.latest()) + 86400, // 24 hours
+        owner: owner.address
+      };
+      
+      await wallet.initialize(config);
+      
+      // Fund the wallet
+      await owner.sendTransaction({
+        to: await wallet.getAddress(),
+        value: ethers.parseEther("10")
+      });
+      
+      // Grant session key to agent1 only (agent2 will be used as replacement agent)
+      await wallet.grantSessionKey({
+        agent: agent1.address,
+        maxPerTx: ethers.parseEther("0.5"),
+        maxDaily: ethers.parseEther("2"),
+        expiry: config.expiry,
+        allowedRecipients: [recipient1.address]
+      });
+      
+      // Set up 5 guardians with 3 threshold
+      const guardians = [agent3.address, agent4.address, agent5.address, agent6.address, owner.address];
+      await wallet.setGuardianConfig(guardians, 3, 172800); // 48 hours
+      
+      return { wallet, entryPoint, owner, agent1, agent2, agent3, agent4, agent5, agent6, recipient1, recipient2, unauthorized, config, guardians };
+    }
+
+    async function deployWithGuardianConfigFixture() {
+      const signers = await ethers.getSigners();
+      const owner = signers[0];
+      const agent1 = signers[1];
+      const agent2 = signers[2];
+      const agent3 = signers[3];
+      const recipient1 = signers[4];
+      const recipient2 = signers[5];
+      const unauthorized = signers[6];
+
+      // Deploy a mock EntryPoint
+      const EntryPointMock = await ethers.getContractFactory("EntryPointMock");
+      const entryPoint = await EntryPointMock.deploy();
+      
+      const MissionWallet = await ethers.getContractFactory("MissionWallet");
+      const wallet = await MissionWallet.deploy(await entryPoint.getAddress());
+      
+      const missionId = `MID-${Date.now().toString(36).toUpperCase()}`;
+      const config = {
+        missionId,
+        totalBudget: ethers.parseEther("10"),
+        maxPerTx: ethers.parseEther("1"),
+        maxDaily: ethers.parseEther("5"),
+        expiry: (await time.latest()) + 86400, // 24 hours
+        owner: owner.address
+      };
+      
+      await wallet.initialize(config);
+      
+      // Fund the wallet
+      await owner.sendTransaction({
+        to: await wallet.getAddress(),
+        value: ethers.parseEther("10")
+      });
+      
+      return { wallet, entryPoint, owner, agent1, agent2, agent3, recipient1, recipient2, unauthorized, config };
+    }
+
+    async function deployWithManyAgentsFixture() {
+      const signers = await ethers.getSigners();
+      const owner = signers[0];
+      const agent1 = signers[1];
+      const agent2 = signers[2];
+      const agent3 = signers[3];
+      const agent4 = signers[4];
+      const agent5 = signers[5];
+      const agent6 = signers[6];
+      const agent7 = signers[7];
+      const recipient1 = signers[8];
+      const recipient2 = signers[9];
+      const unauthorized = signers[10];
+
+      // Deploy a mock EntryPoint
+      const EntryPointMock = await ethers.getContractFactory("EntryPointMock");
+      const entryPoint = await EntryPointMock.deploy();
+      
+      const MissionWallet = await ethers.getContractFactory("MissionWallet");
+      const wallet = await MissionWallet.deploy(await entryPoint.getAddress());
+      
+      const missionId = `MID-${Date.now().toString(36).toUpperCase()}`;
+      const config = {
+        missionId,
+        totalBudget: ethers.parseEther("10"),
+        maxPerTx: ethers.parseEther("1"),
+        maxDaily: ethers.parseEther("5"),
+        expiry: (await time.latest()) + 86400, // 24 hours
+        owner: owner.address
+      };
+      
+      await wallet.initialize(config);
+      
+      // Fund the wallet
+      await owner.sendTransaction({
+        to: await wallet.getAddress(),
+        value: ethers.parseEther("10")
+      });
+      
+      // Set up 5 guardians with 3 threshold
+      const guardians = [agent3.address, agent4.address, agent5.address, agent7.address, owner.address];
+      await wallet.setGuardianConfig(guardians, 3, 172800); // 48 hours
+      
+      return { wallet, entryPoint, owner, agent1, agent2, agent3, agent4, agent5, agent6, agent7, recipient1, recipient2, unauthorized, config, guardians };
+    }
+
+    it("Should set guardian config (owner only)", async function () {
+      const { wallet, owner, agent1, agent2, agent3, unauthorized } = await loadFixture(deployWithGuardianConfigFixture);
+      
+      const guardians = [agent1.address, agent2.address, agent3.address];
+      await expect(wallet.setGuardianConfig(guardians, 2, 172800))
+        .to.emit(wallet, "GuardianConfigSet")
+        .withArgs((await wallet.getMissionConfig()).missionId, guardians, 2, 172800);
+      
+      const config = await wallet.getGuardianConfig();
+      expect(config.guardians).to.deep.equal(guardians);
+      expect(config.threshold).to.equal(2);
+      expect(config.recoveryDelay).to.equal(172800);
+    });
+
+    it("Should reject unauthorized guardian config", async function () {
+      const { wallet, agent1, agent2, agent3, unauthorized } = await loadFixture(deployWithGuardianConfigFixture);
+      
+      const guardians = [agent1.address, agent2.address, agent3.address];
+      await expect(wallet.connect(unauthorized).setGuardianConfig(guardians, 2, 172800))
+        .to.be.revertedWithCustomError(wallet, "OwnableUnauthorizedAccount");
+    });
+
+    it("Should reject zero address guardians", async function () {
+      const { wallet, owner, agent1, agent2 } = await loadFixture(deployWithGuardianConfigFixture);
+      
+      const guardians = [agent1.address, agent2.address, ethers.ZeroAddress];
+      await expect(wallet.setGuardianConfig(guardians, 2, 172800))
+        .to.be.revertedWithCustomError(wallet, "InvalidGuardianConfig");
+    });
+
+    it("Should reject duplicate guardians", async function () {
+      const { wallet, owner, agent1, agent2 } = await loadFixture(deployWithGuardianConfigFixture);
+      
+      const guardians = [agent1.address, agent2.address, agent1.address];
+      await expect(wallet.setGuardianConfig(guardians, 2, 172800))
+        .to.be.revertedWithCustomError(wallet, "InvalidGuardianConfig");
+    });
+
+    it("Should reject threshold > guardians length", async function () {
+      const { wallet, owner, agent1, agent2 } = await loadFixture(deployWithGuardianConfigFixture);
+      
+      const guardians = [agent1.address, agent2.address];
+      await expect(wallet.setGuardianConfig(guardians, 3, 172800))
+        .to.be.revertedWithCustomError(wallet, "InvalidGuardianConfig");
+    });
+
+    it("Should reject threshold < 1", async function () {
+      const { wallet, owner, agent1, agent2, agent3 } = await loadFixture(deployWithGuardianConfigFixture);
+      
+      const guardians = [agent1.address, agent2.address, agent3.address];
+      await expect(wallet.setGuardianConfig(guardians, 0, 172800))
+        .to.be.revertedWithCustomError(wallet, "InvalidGuardianConfig");
+    });
+
+    it("Should reject recovery delay < 48 hours", async function () {
+      const { wallet, owner, agent1, agent2, agent3 } = await loadFixture(deployWithGuardianConfigFixture);
+      
+      const guardians = [agent1.address, agent2.address, agent3.address];
+      await expect(wallet.setGuardianConfig(guardians, 2, 172799))
+        .to.be.revertedWithCustomError(wallet, "InvalidGuardianConfig");
+    });
+
+    it("Should reject > 5 guardians", async function () {
+      const { wallet, owner, agent1, agent2, agent3, agent4, agent5, agent6 } = await loadFixture(deployWithManyAgentsFixture);
+      
+      const guardians = [agent1.address, agent2.address, agent3.address, agent4.address, agent5.address, agent6.address];
+      await expect(wallet.setGuardianConfig(guardians, 3, 172800))
+        .to.be.revertedWithCustomError(wallet, "InvalidGuardianConfig");
+    });
+
+    it("Should request recovery (guardian only)", async function () {
+      const { wallet, owner, agent1, agent2, agent3, guardians, config } = await loadFixture(deployWithGuardiansFixture);
+      
+      // Revoke agent1's key first
+      await wallet.revokeSessionKey(agent1.address);
+      
+      // Request recovery from agent3 (guardian)
+      const tx = await wallet.connect(agent3).requestRecovery(agent1.address, agent2.address);
+      const receipt = await tx.wait();
+      const block = await ethers.provider.getBlock(receipt!.blockNumber);
+      
+      await expect(tx)
+        .to.emit(wallet, "RecoveryRequested")
+        .withArgs(1, agent1.address, agent2.address, block!.timestamp);
+      
+      const request = await wallet.getRecoveryRequest(1);
+      expect(request.requestId).to.equal(1);
+      expect(request.compromisedAgent).to.equal(agent1.address);
+      expect(request.replacementAgent).to.equal(agent2.address);
+      expect(request.approvals).to.equal(1);
+      expect(request.vetoed).to.be.false;
+      expect(request.executed).to.be.false;
+      expect(request.cancelled).to.be.false;
+    });
+
+    it("Should reject recovery request from non-guardian", async function () {
+      const { wallet, owner, agent1, agent2, agent3, unauthorized } = await loadFixture(deployWithGuardiansFixture);
+      
+      await wallet.revokeSessionKey(agent1.address);
+      
+      await expect(wallet.connect(unauthorized).requestRecovery(agent1.address, agent2.address))
+        .to.be.revertedWithCustomError(wallet, "NotGuardian");
+    });
+
+    it("Should reject recovery request for agent with no key", async function () {
+      const { wallet, owner, agent1, agent2, agent3 } = await loadFixture(deployWithGuardiansFixture);
+      
+      // agent1 doesn't have a key in this fixture
+      await expect(wallet.connect(agent3).requestRecovery(agent1.address, agent2.address))
+        .to.be.revertedWithCustomError(wallet, "CompromisedAgentHasNoKey");
+    });
+
+    it("Should reject recovery request for non-revoked key", async function () {
+      const { wallet, owner, agent1, agent2, agent3, config } = await loadFixture(deployWithGuardiansFixture);
+      
+      // agent1 has a valid (non-revoked) key
+      await expect(wallet.connect(agent3).requestRecovery(agent1.address, agent2.address))
+        .to.be.revertedWithCustomError(wallet, "CompromisedAgentHasNoKey");
+    });
+
+    it("Should reject recovery request when replacement agent already has key", async function () {
+      const { wallet, owner, agent1, agent2, agent3 } = await loadFixture(deployWithGuardiansFixture);
+      
+      // Grant a key to agent2 first
+      await wallet.grantSessionKey({
+        agent: agent2.address,
+        maxPerTx: ethers.parseEther("0.5"),
+        maxDaily: ethers.parseEther("2"),
+        expiry: (await wallet.getMissionConfig()).expiry,
+        allowedRecipients: []
+      });
+      
+      await wallet.revokeSessionKey(agent1.address);
+      // agent2 already has a key
+      await expect(wallet.connect(agent3).requestRecovery(agent1.address, agent2.address))
+        .to.be.revertedWithCustomError(wallet, "ReplacementAgentAlreadyHasKey");
+    });
+
+    it("Should reject recovery request during emergency freeze", async function () {
+      const { wallet, owner, agent1, agent2, agent3, agent7 } = await loadFixture(deployWithManyAgentsFixture);
+      
+      await wallet.grantSessionKey({
+        agent: agent1.address,
+        maxPerTx: ethers.parseEther("0.5"),
+        maxDaily: ethers.parseEther("2"),
+        expiry: (await wallet.getMissionConfig()).expiry,
+        allowedRecipients: []
+      });
+      
+      await wallet.revokeSessionKey(agent1.address);
+      
+      const guardians = [agent2.address, agent3.address, agent7.address];
+      await wallet.setGuardianConfig(guardians, 2, 172800);
+      
+      await wallet.activateEmergencyFreeze();
+      
+      await expect(wallet.connect(agent2).requestRecovery(agent1.address, agent3.address))
+        .to.be.revertedWithCustomError(wallet, "MissionFrozen");
+    });
+
+    it("Should approve recovery (guardian only)", async function () {
+      const { wallet, owner, agent1, agent2, agent3, agent4, guardians } = await loadFixture(deployWithGuardiansFixture);
+      
+      await wallet.revokeSessionKey(agent1.address);
+      await wallet.connect(agent3).requestRecovery(agent1.address, agent2.address);
+      
+      // agent4 approves
+      await expect(wallet.connect(agent4).approveRecovery(1))
+        .to.emit(wallet, "RecoveryApproved")
+        .withArgs(1, agent4.address);
+      
+      const request = await wallet.getRecoveryRequest(1);
+      expect(request.approvals).to.equal(2);
+    });
+
+    it("Should reject approval from non-guardian", async function () {
+      const { wallet, owner, agent1, agent2, agent3, unauthorized } = await loadFixture(deployWithGuardiansFixture);
+      
+      await wallet.revokeSessionKey(agent1.address);
+      await wallet.connect(agent3).requestRecovery(agent1.address, agent2.address);
+      
+      await expect(wallet.connect(unauthorized).approveRecovery(1))
+        .to.be.revertedWithCustomError(wallet, "NotGuardian");
+    });
+
+    it("Should reject duplicate approval", async function () {
+      const { wallet, owner, agent1, agent2, agent3, agent4 } = await loadFixture(deployWithGuardiansFixture);
+      
+      await wallet.revokeSessionKey(agent1.address);
+      await wallet.connect(agent3).requestRecovery(agent1.address, agent2.address);
+      await wallet.connect(agent4).approveRecovery(1);
+      
+      await expect(wallet.connect(agent4).approveRecovery(1))
+        .to.be.revertedWithCustomError(wallet, "AlreadyApproved");
+    });
+
+    it("Should reject approval for non-existent request", async function () {
+      const { wallet, agent3 } = await loadFixture(deployWithGuardiansFixture);
+      
+      await expect(wallet.connect(agent3).approveRecovery(999))
+        .to.be.revertedWithCustomError(wallet, "InvalidRecoveryRequest");
+    });
+
+    it("Should reject approval for executed request", async function () {
+      const { wallet, owner, agent1, agent2, agent3, agent4, agent5, agent7, config } = await loadFixture(deployWithManyAgentsFixture);
+      
+      // Grant key to agent1
+      await wallet.grantSessionKey({
+        agent: agent1.address,
+        maxPerTx: ethers.parseEther("0.5"),
+        maxDaily: ethers.parseEther("2"),
+        expiry: config.expiry,
+        allowedRecipients: []
+      });
+      
+      await wallet.revokeSessionKey(agent1.address);
+      // Use agent7 as replacement (no key initially)
+      await wallet.connect(agent3).requestRecovery(agent1.address, agent7.address);
+      
+      // Owner grants key to agent7
+      await wallet.grantSessionKey({
+        agent: agent7.address,
+        maxPerTx: ethers.parseEther("0.5"),
+        maxDaily: ethers.parseEther("2"),
+        expiry: config.expiry,
+        allowedRecipients: []
+      });
+      
+      await wallet.connect(agent4).approveRecovery(1);
+      await wallet.connect(agent5).approveRecovery(1);
+      // agent7 approves (owner is also guardian, so we need 3 approvals: agent3, agent4, agent5)
+      await wallet.connect(agent7).approveRecovery(1);
+      
+      // Fast forward 48 hours
+      await time.increase(172800);
+      
+      await wallet.executeRecovery(1);
+      
+      await expect(wallet.connect(agent3).approveRecovery(1))
+        .to.be.revertedWithCustomError(wallet, "RecoveryAlreadyExecuted");
+    });
+
+    it("Should reject approval for vetoed request", async function () {
+      const { wallet, owner, agent1, agent2, agent3, agent4 } = await loadFixture(deployWithGuardiansFixture);
+      
+      await wallet.revokeSessionKey(agent1.address);
+      await wallet.connect(agent3).requestRecovery(agent1.address, agent2.address);
+      await wallet.vetoRecovery(1);
+      
+      await expect(wallet.connect(agent4).approveRecovery(1))
+        .to.be.revertedWithCustomError(wallet, "RecoveryVetoedByOwner");
+    });
+
+    it("Should veto recovery (owner only)", async function () {
+      const { wallet, owner, agent1, agent2, agent3, agent4 } = await loadFixture(deployWithGuardiansFixture);
+      
+      await wallet.revokeSessionKey(agent1.address);
+      await wallet.connect(agent3).requestRecovery(agent1.address, agent2.address);
+      await wallet.connect(agent4).approveRecovery(1);
+      
+      await expect(wallet.vetoRecovery(1))
+        .to.emit(wallet, "RecoveryVetoed")
+        .withArgs(1, owner.address);
+      
+      const request = await wallet.getRecoveryRequest(1);
+      expect(request.vetoed).to.be.true;
+    });
+
+    it("Should reject veto from non-owner", async function () {
+      const { wallet, owner, agent1, agent2, agent3, agent4, unauthorized } = await loadFixture(deployWithGuardiansFixture);
+      
+      await wallet.revokeSessionKey(agent1.address);
+      await wallet.connect(agent3).requestRecovery(agent1.address, agent2.address);
+      
+      await expect(wallet.connect(unauthorized).vetoRecovery(1))
+        .to.be.revertedWithCustomError(wallet, "OwnableUnauthorizedAccount");
+    });
+
+    it("Should execute recovery after delay and threshold met", async function () {
+      const { wallet, owner, agent1, agent2, agent3, agent4, agent5, agent7, config } = await loadFixture(deployWithManyAgentsFixture);
+      
+      // Grant key to agent1
+      await wallet.grantSessionKey({
+        agent: agent1.address,
+        maxPerTx: ethers.parseEther("0.5"),
+        maxDaily: ethers.parseEther("2"),
+        expiry: config.expiry,
+        allowedRecipients: []
+      });
+      
+      await wallet.revokeSessionKey(agent1.address);
+      // Use agent7 as replacement (no key initially)
+      await wallet.connect(agent3).requestRecovery(agent1.address, agent7.address);
+      
+      // Owner grants key to agent7
+      await wallet.grantSessionKey({
+        agent: agent7.address,
+        maxPerTx: ethers.parseEther("0.5"),
+        maxDaily: ethers.parseEther("2"),
+        expiry: config.expiry,
+        allowedRecipients: []
+      });
+      
+      await wallet.connect(agent4).approveRecovery(1);
+      await wallet.connect(agent5).approveRecovery(1);
+      // agent7 approves (owner is also guardian, so we need 3 approvals: agent3, agent4, agent5)
+      await wallet.connect(agent7).approveRecovery(1);
+      
+      // Fast forward 48 hours
+      await time.increase(172800);
+      
+      await expect(wallet.executeRecovery(1))
+        .to.emit(wallet, "RecoveryExecuted")
+        .withArgs(1, agent1.address, agent7.address);
+      
+      const request = await wallet.getRecoveryRequest(1);
+      expect(request.executed).to.be.true;
+      
+      // Compromised agent key should be revoked
+      const compromisedKey = await wallet.getSessionKey(agent1.address);
+      expect(compromisedKey.revoked).to.be.true;
+    });
+
+    it("Should reject execution before 48-hour delay", async function () {
+      const { wallet, owner, agent1, agent2, agent3, agent4, agent5, agent7, config } = await loadFixture(deployWithManyAgentsFixture);
+      
+      // Grant key to agent1
+      await wallet.grantSessionKey({
+        agent: agent1.address,
+        maxPerTx: ethers.parseEther("0.5"),
+        maxDaily: ethers.parseEther("2"),
+        expiry: config.expiry,
+        allowedRecipients: []
+      });
+      
+      await wallet.revokeSessionKey(agent1.address);
+      // Use agent7 as replacement (no key initially)
+      await wallet.connect(agent3).requestRecovery(agent1.address, agent7.address);
+      
+      // Owner grants key to agent7
+      await wallet.grantSessionKey({
+        agent: agent7.address,
+        maxPerTx: ethers.parseEther("0.5"),
+        maxDaily: ethers.parseEther("2"),
+        expiry: config.expiry,
+        allowedRecipients: []
+      });
+      
+      await wallet.connect(agent4).approveRecovery(1);
+      await wallet.connect(agent5).approveRecovery(1);
+      await wallet.connect(agent7).approveRecovery(1);
+      
+      // Try to execute before 48 hours
+      await expect(wallet.executeRecovery(1))
+        .to.be.revertedWithCustomError(wallet, "RecoveryDelayNotMet");
+    });
+
+    it("Should reject execution without threshold approvals", async function () {
+      const { wallet, owner, agent1, agent2, agent3, agent4, agent5, agent7, config } = await loadFixture(deployWithManyAgentsFixture);
+      
+      // Grant key to agent1
+      await wallet.grantSessionKey({
+        agent: agent1.address,
+        maxPerTx: ethers.parseEther("0.5"),
+        maxDaily: ethers.parseEther("2"),
+        expiry: config.expiry,
+        allowedRecipients: []
+      });
+      
+      await wallet.revokeSessionKey(agent1.address);
+      // Use agent7 as replacement (no key initially)
+      await wallet.connect(agent3).requestRecovery(agent1.address, agent7.address);
+      
+      // Owner grants key to agent7
+      await wallet.grantSessionKey({
+        agent: agent7.address,
+        maxPerTx: ethers.parseEther("0.5"),
+        maxDaily: ethers.parseEther("2"),
+        expiry: config.expiry,
+        allowedRecipients: []
+      });
+      
+      // Only 2 approvals (agent3 + agent4), need 3
+      await wallet.connect(agent4).approveRecovery(1);
+      
+      await time.increase(172800);
+      
+      await expect(wallet.executeRecovery(1))
+        .to.be.revertedWithCustomError(wallet, "InvalidRecoveryRequest");
+    });
+
+    it("Should reject execution of vetoed request", async function () {
+      const { wallet, owner, agent1, agent2, agent3, agent4, agent5, agent7, config } = await loadFixture(deployWithManyAgentsFixture);
+      
+      // Grant key to agent1
+      await wallet.grantSessionKey({
+        agent: agent1.address,
+        maxPerTx: ethers.parseEther("0.5"),
+        maxDaily: ethers.parseEther("2"),
+        expiry: config.expiry,
+        allowedRecipients: []
+      });
+      
+      await wallet.revokeSessionKey(agent1.address);
+      // Use agent7 as replacement (no key initially)
+      await wallet.connect(agent3).requestRecovery(agent1.address, agent7.address);
+      
+      // Owner grants key to agent7
+      await wallet.grantSessionKey({
+        agent: agent7.address,
+        maxPerTx: ethers.parseEther("0.5"),
+        maxDaily: ethers.parseEther("2"),
+        expiry: config.expiry,
+        allowedRecipients: []
+      });
+      
+      await wallet.connect(agent4).approveRecovery(1);
+      await wallet.connect(agent5).approveRecovery(1);
+      await wallet.connect(agent7).approveRecovery(1);
+      await wallet.vetoRecovery(1);
+      
+      await time.increase(172800);
+      
+      await expect(wallet.executeRecovery(1))
+        .to.be.revertedWithCustomError(wallet, "RecoveryVetoedByOwner");
+    });
+
+    it("Should reject execution during emergency freeze", async function () {
+      const { wallet, owner, agent1, agent2, agent3, agent4, agent5, agent7, config } = await loadFixture(deployWithManyAgentsFixture);
+      
+      // Grant key to agent1
+      await wallet.grantSessionKey({
+        agent: agent1.address,
+        maxPerTx: ethers.parseEther("0.5"),
+        maxDaily: ethers.parseEther("2"),
+        expiry: config.expiry,
+        allowedRecipients: []
+      });
+      
+      await wallet.revokeSessionKey(agent1.address);
+      
+      const guardians = [agent2.address, agent3.address, agent4.address, agent7.address, owner.address];
+      await wallet.setGuardianConfig(guardians, 3, 172800);
+      
+      // Use agent7 as replacement (no key initially)
+      await wallet.connect(agent2).requestRecovery(agent1.address, agent7.address);
+      
+      // Owner grants key to agent7
+      await wallet.grantSessionKey({
+        agent: agent7.address,
+        maxPerTx: ethers.parseEther("0.5"),
+        maxDaily: ethers.parseEther("2"),
+        expiry: config.expiry,
+        allowedRecipients: []
+      });
+      
+      await wallet.connect(agent3).approveRecovery(1);
+      await wallet.connect(agent4).approveRecovery(1);
+      await wallet.connect(agent7).approveRecovery(1);
+      
+      await time.increase(172800);
+      
+      await wallet.activateEmergencyFreeze();
+      
+      await expect(wallet.executeRecovery(1))
+        .to.be.revertedWithCustomError(wallet, "MissionFrozen");
+    });
+
+    it("Should cancel recovery (requester or owner)", async function () {
+      const { wallet, owner, agent1, agent2, agent3, agent4 } = await loadFixture(deployWithGuardiansFixture);
+      
+      await wallet.revokeSessionKey(agent1.address);
+      await wallet.connect(agent3).requestRecovery(agent1.address, agent2.address);
+      
+      await expect(wallet.connect(agent3).cancelRecovery(1))
+        .to.emit(wallet, "RecoveryCancelled")
+        .withArgs(1);
+      
+      const request = await wallet.getRecoveryRequest(1);
+      expect(request.cancelled).to.be.true;
+    });
+
+    it("Should allow owner to cancel recovery", async function () {
+      const { wallet, owner, agent1, agent2, agent3 } = await loadFixture(deployWithGuardiansFixture);
+      
+      await wallet.revokeSessionKey(agent1.address);
+      await wallet.connect(agent3).requestRecovery(agent1.address, agent2.address);
+      
+      await expect(wallet.cancelRecovery(1))
+        .to.emit(wallet, "RecoveryCancelled")
+        .withArgs(1);
+    });
+
+    it("Should reject cancel from unauthorized account", async function () {
+      const { wallet, owner, agent1, agent2, agent3, agent4, unauthorized } = await loadFixture(deployWithGuardiansFixture);
+      
+      await wallet.revokeSessionKey(agent1.address);
+      await wallet.connect(agent3).requestRecovery(agent1.address, agent2.address);
+      
+      await expect(wallet.connect(unauthorized).cancelRecovery(1))
+        .to.be.revertedWithCustomError(wallet, "UnauthorizedCaller");
+    });
+
+    it("Should reject cancel of executed request", async function () {
+      const { wallet, owner, agent1, agent2, agent3, agent4, agent5, agent7, config } = await loadFixture(deployWithManyAgentsFixture);
+      
+      // Grant key to agent1
+      await wallet.grantSessionKey({
+        agent: agent1.address,
+        maxPerTx: ethers.parseEther("0.5"),
+        maxDaily: ethers.parseEther("2"),
+        expiry: config.expiry,
+        allowedRecipients: []
+      });
+      
+      await wallet.revokeSessionKey(agent1.address);
+      // Use agent7 as replacement (no key initially)
+      await wallet.connect(agent3).requestRecovery(agent1.address, agent7.address);
+      
+      // Owner grants key to agent7
+      await wallet.grantSessionKey({
+        agent: agent7.address,
+        maxPerTx: ethers.parseEther("0.5"),
+        maxDaily: ethers.parseEther("2"),
+        expiry: config.expiry,
+        allowedRecipients: []
+      });
+      
+      await wallet.connect(agent4).approveRecovery(1);
+      await wallet.connect(agent5).approveRecovery(1);
+      await wallet.connect(agent7).approveRecovery(1);
+      
+      await time.increase(172800);
+      await wallet.executeRecovery(1);
+      
+      await expect(wallet.cancelRecovery(1))
+        .to.be.revertedWithCustomError(wallet, "RecoveryAlreadyExecuted");
+    });
+
+    it("Should emit SessionKeyReplaced event on recovery execution", async function () {
+      const { wallet, owner, agent1, agent2, agent3, agent4, agent5, agent7, config } = await loadFixture(deployWithManyAgentsFixture);
+      
+      // Grant key to agent1
+      await wallet.grantSessionKey({
+        agent: agent1.address,
+        maxPerTx: ethers.parseEther("0.5"),
+        maxDaily: ethers.parseEther("2"),
+        expiry: config.expiry,
+        allowedRecipients: []
+      });
+      
+      await wallet.revokeSessionKey(agent1.address);
+      // Use agent7 as replacement (no key initially)
+      await wallet.connect(agent3).requestRecovery(agent1.address, agent7.address);
+      
+      // Owner grants key to agent7
+      await wallet.grantSessionKey({
+        agent: agent7.address,
+        maxPerTx: ethers.parseEther("0.5"),
+        maxDaily: ethers.parseEther("2"),
+        expiry: config.expiry,
+        allowedRecipients: []
+      });
+      
+      await wallet.connect(agent4).approveRecovery(1);
+      await wallet.connect(agent5).approveRecovery(1);
+      await wallet.connect(agent7).approveRecovery(1);
+      
+      await time.increase(172800);
+      
+      await expect(wallet.executeRecovery(1))
+        .to.emit(wallet, "SessionKeyReplaced")
+        .withArgs((await wallet.getMissionConfig()).missionId, agent1.address, agent7.address);
+    });
+
+    it("Should allow owner to replace session key directly", async function () {
+      const { wallet, owner, agent1, agent2, config } = await loadFixture(deployWithGuardiansFixture);
+      
+      await wallet.revokeSessionKey(agent1.address);
+      
+      await expect(wallet.replaceSessionKey(agent1.address, {
+        agent: agent2.address,
+        maxPerTx: ethers.parseEther("0.5"),
+        maxDaily: ethers.parseEther("2"),
+        expiry: config.expiry,
+        allowedRecipients: []
+      }))
+        .to.emit(wallet, "SessionKeyGranted")
+        .withArgs(config.missionId, agent2.address, config.expiry);
+      
+      const newKey = await wallet.getSessionKey(agent2.address);
+      expect(newKey.maxPerTx).to.equal(ethers.parseEther("0.5"));
+      expect(newKey.revoked).to.be.false;
+    });
+
+    it("Should reject owner replace session key for non-revoked agent", async function () {
+      const { wallet, owner, agent1, agent2, config } = await loadFixture(deployWithGuardiansFixture);
+      
+      // agent1 has valid key (not revoked)
+      await expect(wallet.replaceSessionKey(agent1.address, {
+        agent: agent2.address,
+        maxPerTx: ethers.parseEther("0.5"),
+        maxDaily: ethers.parseEther("2"),
+        expiry: config.expiry,
+        allowedRecipients: []
+      }))
+        .to.be.revertedWithCustomError(wallet, "CompromisedAgentHasNoKey");
+    });
+
+    it("Should track isGuardian correctly", async function () {
+      const { wallet, owner, agent1, agent2, agent3, guardians } = await loadFixture(deployWithGuardiansFixture);
+      
+      expect(await wallet.isGuardian(agent1.address)).to.be.false; // Not a guardian
+      expect(await wallet.isGuardian(agent3.address)).to.be.true;  // Is a guardian
+      expect(await wallet.isGuardian(owner.address)).to.be.true;   // Owner is a guardian
+    });
+  });
 });
