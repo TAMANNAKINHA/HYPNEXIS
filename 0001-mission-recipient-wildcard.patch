@@ -1,0 +1,12 @@
+--- a/src/services/paymentService.ts	2026-10-24 14:51:38.374921181 +0000
++++ b/src/services/paymentService.ts	2026-10-24 14:51:38.375995365 +0000
+@@ -91,7 +91,8 @@
+   if (process.env.MISSION_RECIPIENTS_JSON) {
+     try {
+       const mapping = JSON.parse(process.env.MISSION_RECIPIENTS_JSON);
+-      const allowed = mapping[p.missionId];
++      // "*" is an optional fallback for missions whose IDs are generated at runtime (local demo).
++      const allowed = mapping[p.missionId] ?? mapping['*'];
+       if (!Array.isArray(allowed) || !allowed.some((address: unknown) => typeof address === 'string' && address.toLowerCase() === p.recipient.toLowerCase())) violations.push('Recipient is not authorized for this mission');
+     } catch { violations.push('MISSION_RECIPIENTS_JSON is invalid'); }
+   } else if (getMode() === 'real') violations.push('Mission-specific recipient policy is not configured');

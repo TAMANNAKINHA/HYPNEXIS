@@ -1,6 +1,7 @@
 node_modules/
 .env
 .env.*
+!.env.example
 .DS_Store
 *.log
 dist/
@@ -8,3 +9,9 @@ build/
 artifacts/
 cache/
 typechain-types/
+data/
+.run/
+coverage/
+# deployments/*.json are local-chain outputs; regenerate with scripts/deploy-local.ts
+deployments/*.json
+!deployments/.gitkeep

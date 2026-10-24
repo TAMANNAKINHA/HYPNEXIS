@@ -29,6 +29,11 @@ const config: HardhatUserConfig = {
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
       chainId: 84532,
     },
+    localhost: {
+      // `npx hardhat node` (scripts/chain.sh start). Same chain id as the in-process network.
+      url: process.env.LOCAL_RPC_URL || "http://127.0.0.1:8545",
+      chainId: 1337,
+    },
     hardhat: {
       chainId: 1337,
       mining: {
